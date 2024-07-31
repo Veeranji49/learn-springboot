@@ -1,18 +1,31 @@
 package com.example;
 
+import net.sf.jsqlparser.expression.*;
+import net.sf.jsqlparser.parser.CCJSqlParserUtil;
+import net.sf.jsqlparser.schema.Column;
+import net.sf.jsqlparser.statement.Statement;
+import net.sf.jsqlparser.statement.StatementVisitorAdapter;
+import net.sf.jsqlparser.statement.select.*;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+
+/*
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+*/
 
 @SpringBootApplication
 public class SqlMaskingApplication {
 
-	public static void main(String[] args) {
+	public static void main(String[] args) throws Exception {
 		SpringApplication.run(SqlMaskingApplication.class, args);
 
-		String sqlQuery = "SELECT \n" +
+		// The query with the masking function in the output
+		/*String sqlQuery = "SELECT \n" +
 				"    e1.employee_id, \n" +
 				"    e1.name, \n" +
 				"    e1.department_id, \n" +
@@ -110,5 +123,149 @@ public class SqlMaskingApplication {
 			return input;
 		}
 		return input.charAt(0) + "*".repeat(input.length() - 2) + input.charAt(input.length() - 1);
+	}
+}*/
+
+		//Extracting column names -Task-2
+
+		String sqlQuery = "SELECT a.column1, b.column2, c.column3, " +
+				"(SELECT d.column4 FROM table2 d WHERE d.column5 = a.column1) " +
+				"FROM table1 a JOIN table3 b ON a.column1 = b.column2 " +
+				"WHERE a.column6 IN (SELECT e.column7 FROM table4 e) " +
+				"ORDER BY a.column1, b.column2";
+
+		Set<String> columnNames = getColumnNamesFromQuery(sqlQuery);
+
+		for (String columnName : columnNames) {
+			System.out.println(columnName);
+		}
+	}
+
+	public static Set<String> getColumnNamesFromQuery(String sqlQuery) throws Exception {
+		Set<String> columnNames = new HashSet<>();
+		Statement statement = CCJSqlParserUtil.parse(sqlQuery);
+
+		statement.accept(new StatementVisitorAdapter() {
+			@Override
+			public void visit(Select select) {
+				SelectBody selectBody = select.getSelectBody();
+				extractColumnNamesFromSelectBody(selectBody, columnNames);
+			}
+		});
+
+		return columnNames;
+	}
+
+	private static void extractColumnNamesFromSelectBody(SelectBody selectBody, Set<String> columnNames) {
+		if (selectBody instanceof PlainSelect) {
+			PlainSelect plainSelect = (PlainSelect) selectBody;
+			extractColumnNamesFromPlainSelect(plainSelect, columnNames);
+		} else if (selectBody instanceof SetOperationList) {
+			SetOperationList setOperationList = (SetOperationList) selectBody;
+			for (SelectBody selectBody1 : setOperationList.getSelects()) {
+				extractColumnNamesFromSelectBody(selectBody1, columnNames);
+			}
+		}
+	}
+
+	private static void extractColumnNamesFromPlainSelect(PlainSelect plainSelect, Set<String> columnNames) {
+		extractColumnNamesFromSelectItems(plainSelect.getSelectItems(), columnNames);
+		extractColumnNamesFromExpression(plainSelect.getWhere(), columnNames);
+		extractColumnNamesFromOrderByElements(plainSelect.getOrderByElements(), columnNames);
+//		extractColumnNamesFromGroupByElements(plainSelect.getGroupByColumnReferences(), columnNames);
+		extractColumnNamesFromJoins(plainSelect.getJoins(), columnNames);
+	}
+
+	private static void extractColumnNamesFromSelectItems(List<SelectItem> selectItems, Set<String> columnNames) {
+		for (SelectItem selectItem : selectItems) {
+			selectItem.accept(new SelectItemVisitor() {
+				@Override
+				public void visit(AllColumns allColumns) {
+				}
+
+				@Override
+				public void visit(AllTableColumns allTableColumns) {
+					columnNames.add(allTableColumns.getTable().getFullyQualifiedName() + ".*");
+				}
+
+				@Override
+				public void visit(SelectExpressionItem selectExpressionItem) {
+					Expression expression = selectExpressionItem.getExpression();
+					extractColumnNamesFromExpression(expression, columnNames);
+				}
+			});
+		}
+	}
+
+	private static void extractColumnNamesFromExpression(Expression expression, Set<String> columnNames) {
+		if (expression != null) {
+			expression.accept(new ExpressionVisitorAdapter() {
+				@Override
+				public void visit(Column column) {
+					columnNames.add(column.getFullyQualifiedName());
+				}
+
+				@Override
+				public void visit(SubSelect subSelect) {
+					extractColumnNamesFromSelectBody(subSelect.getSelectBody(), columnNames);
+				}
+
+				@Override
+				public void visit(Function function) {
+					if (function.getParameters() != null) {
+						List<Expression> expressions = function.getParameters().getExpressions();
+						for (Expression expr : expressions) {
+							extractColumnNamesFromExpression(expr, columnNames);
+						}
+					}
+				}
+
+				@Override
+				public void visit(CaseExpression caseExpression) {
+					extractColumnNamesFromExpression(caseExpression.getSwitchExpression(), columnNames);
+					if (caseExpression.getWhenClauses() != null) {
+						for (Expression whenClause : caseExpression.getWhenClauses()) {
+							extractColumnNamesFromExpression(whenClause, columnNames);
+						}
+					}
+					extractColumnNamesFromExpression(caseExpression.getElseExpression(), columnNames);
+				}
+
+				@Override
+				protected void visitBinaryExpression(BinaryExpression binaryExpression) {
+					extractColumnNamesFromExpression(binaryExpression.getLeftExpression(), columnNames);
+					extractColumnNamesFromExpression(binaryExpression.getRightExpression(), columnNames);
+					super.visitBinaryExpression(binaryExpression);
+				}
+			});
+		}
+	}
+
+	private static void extractColumnNamesFromOrderByElements(List<OrderByElement> orderByElements, Set<String> columnNames) {
+		if (orderByElements != null) {
+			for (OrderByElement orderByElement : orderByElements) {
+				extractColumnNamesFromExpression(orderByElement.getExpression(), columnNames);
+			}
+		}
+	}
+
+	private static void extractColumnNamesFromGroupByElements(List<Expression> groupByElements, Set<String> columnNames) {
+		if (groupByElements != null) {
+			for (Expression groupByElement : groupByElements) {
+				extractColumnNamesFromExpression(groupByElement, columnNames);
+			}
+		}
+	}
+
+	private static void extractColumnNamesFromJoins(List<Join> joins, Set<String> columnNames) {
+		if (joins != null) {
+			for (Join join : joins) {
+				extractColumnNamesFromExpression(join.getOnExpression(), columnNames);
+				if (join.getRightItem() instanceof SubSelect) {
+					SubSelect subSelect = (SubSelect) join.getRightItem();
+					extractColumnNamesFromSelectBody(subSelect.getSelectBody(), columnNames);
+				}
+			}
+		}
 	}
 }
