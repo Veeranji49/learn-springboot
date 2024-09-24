@@ -3,15 +3,14 @@ package com.example;
 import net.sf.jsqlparser.expression.*;
 import net.sf.jsqlparser.parser.CCJSqlParserUtil;
 import net.sf.jsqlparser.schema.Column;
+import net.sf.jsqlparser.schema.Table;
 import net.sf.jsqlparser.statement.Statement;
 import net.sf.jsqlparser.statement.StatementVisitorAdapter;
 import net.sf.jsqlparser.statement.select.*;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
+import java.util.*;
 
 /*
 import java.util.regex.Matcher;
@@ -127,12 +126,36 @@ public class SqlMaskingApplication {
 }*/
 
 		//Extracting column names -Task-2
+/*
 
-		String sqlQuery = "SELECT a.column1, b.column2, c.column3, " +
-				"(SELECT d.column4 FROM table2 d WHERE d.column5 = a.column1) " +
-				"FROM table1 a JOIN table3 b ON a.column1 = b.column2 " +
-				"WHERE a.column6 IN (SELECT e.column7 FROM table4 e) " +
-				"ORDER BY a.column1, b.column2";
+		String sqlQuery = "SELECT \n" +
+				"    e1.employee_id, \n" +
+				"    e1.name, \n" +
+				"    e1.department_id, \n" +
+				"    d1.department_name,\n" +
+				"    (SELECT AVG(salary) \n" +
+				"     FROM employees e2 \n" +
+				"     WHERE e2.department_id = e1.department_id) AS avg_department_salary,\n" +
+				"    (CASE \n" +
+				"        WHEN e1.salary > (SELECT AVG(salary) FROM employees e3 WHERE e3.department_id = e1.department_id)\n" +
+				"        THEN 'Above Average'\n" +
+				"        ELSE 'Below Average'\n" +
+				"    END) AS salary_comparison\n" +
+				"FROM \n" +
+				"    employees e1\n" +
+				"JOIN \n" +
+				"    departments d1 ON e1.department_id = d1.department_id\n" +
+				"WHERE \n" +
+				"    e1.status = 'Active'\n" +
+				"    AND e1.department_id IN (SELECT department_id FROM departments WHERE location = 'New York')\n" +
+				"GROUP BY \n" +
+				"    e1.employee_id, \n" +
+				"    e1.name, \n" +
+				"    e1.department_id, \n" +
+				"    d1.department_name,\n" +
+				"    e1.salary\n" +
+				"ORDER BY \n" +
+				"    e1.name ASC;";
 
 		Set<String> columnNames = getColumnNamesFromQuery(sqlQuery);
 
@@ -264,6 +287,202 @@ public class SqlMaskingApplication {
 				if (join.getRightItem() instanceof SubSelect) {
 					SubSelect subSelect = (SubSelect) join.getRightItem();
 					extractColumnNamesFromSelectBody(subSelect.getSelectBody(), columnNames);
+				}
+			}
+		}
+	}
+}*/
+
+		// Extracting columns with table name
+
+		String sqlQuery = "SELECT \n" +
+				"    e1.employee_id, \n" +
+				"    e1.name, \n" +
+				"    e1.department_id, \n" +
+				"    d1.department_name,\n" +
+				"    (SELECT AVG(salary) \n" +
+				"     FROM employees e2 \n" +
+				"     WHERE e2.department_id = e1.department_id) AS avg_department_salary,\n" +
+				"    (CASE \n" +
+				"        WHEN e1.salary > (SELECT AVG(salary) FROM employees e3 WHERE e3.department_id = e1.department_id)\n" +
+				"        THEN 'Above Average'\n" +
+				"        ELSE 'Below Average'\n" +
+				"    END) AS salary_comparison\n" +
+				"FROM \n" +
+				"    employees e1\n" +
+				"JOIN \n" +
+				"    departments d1 ON e1.department_id = d1.department_id\n" +
+				"WHERE \n" +
+				"    e1.status = 'Active'\n" +
+				"    AND e1.department_id IN (SELECT department_id FROM departments WHERE location = 'New York')\n" +
+				"GROUP BY \n" +
+				"    e1.employee_id, \n" +
+				"    e1.name, \n" +
+				"    e1.department_id, \n" +
+				"    d1.department_name,\n" +
+				"    e1.salary\n" +
+				"ORDER BY \n" +
+				"    e1.name ASC;";
+
+		Set<String> columnNames = getColumnNamesFromQuery(sqlQuery);
+
+		System.out.println("Extracting columns from query :");
+		for (String columnName : columnNames) {
+			System.out.println(columnName);
+		}
+	}
+
+	public static Set<String> getColumnNamesFromQuery(String sqlQuery) throws Exception {
+		Set<String> columnNames = new HashSet<>();
+		Map<String, String> tableAliasMap = new HashMap<>();
+
+		Statement statement = CCJSqlParserUtil.parse(sqlQuery);
+
+		statement.accept(new StatementVisitorAdapter() {
+			@Override
+			public void visit(Select select) {
+				SelectBody selectBody = select.getSelectBody();
+				extractColumnNamesFromSelectBody(selectBody, tableAliasMap, columnNames);
+			}
+		});
+
+		return columnNames;
+	}
+
+	private static void extractColumnNamesFromSelectBody(SelectBody selectBody, Map<String, String> tableAliasMap, Set<String> columnNames) {
+		if (selectBody instanceof PlainSelect) {
+			PlainSelect plainSelect = (PlainSelect) selectBody;
+			extractColumnNamesFromPlainSelect(plainSelect, tableAliasMap, columnNames);
+		} else if (selectBody instanceof SetOperationList) {
+			SetOperationList setOperationList = (SetOperationList) selectBody;
+			for (SelectBody selectBody1 : setOperationList.getSelects()) {
+				extractColumnNamesFromSelectBody(selectBody1, tableAliasMap, columnNames);
+			}
+		}
+	}
+
+	private static void extractColumnNamesFromPlainSelect(PlainSelect plainSelect, Map<String, String> tableAliasMap, Set<String> columnNames) {
+		// Extract table aliases from FROM and JOIN clauses
+		extractTableAliases(plainSelect.getFromItem(), tableAliasMap);
+		if (plainSelect.getJoins() != null) {
+			for (Join join : plainSelect.getJoins()) {
+				extractTableAliases(join.getRightItem(), tableAliasMap);
+			}
+		}
+
+		extractColumnNamesFromSelectItems(plainSelect.getSelectItems(), tableAliasMap, columnNames);
+		extractColumnNamesFromExpression(plainSelect.getWhere(), tableAliasMap, columnNames);
+		extractColumnNamesFromOrderByElements(plainSelect.getOrderByElements(), tableAliasMap, columnNames);
+		// extractColumnNamesFromGroupByElements(plainSelect.getGroupByColumnReferences(), tableAliasMap, columnNames);
+		extractColumnNamesFromJoins(plainSelect.getJoins(), tableAliasMap, columnNames);
+	}
+
+	private static void extractTableAliases(FromItem fromItem, Map<String, String> tableAliasMap) {
+		if (fromItem instanceof Table) {
+			Table table = (Table) fromItem;
+			tableAliasMap.put(table.getAlias() != null ? table.getAlias().getName() : table.getName(), table.getName());
+		} else if (fromItem instanceof SubSelect) {
+			SubSelect subSelect = (SubSelect) fromItem;
+			extractColumnNamesFromSelectBody(subSelect.getSelectBody(), tableAliasMap, new HashSet<>());
+		}
+	}
+
+	private static void extractColumnNamesFromSelectItems(List<SelectItem> selectItems, Map<String, String> tableAliasMap, Set<String> columnNames) {
+		if (selectItems != null) {
+			for (SelectItem selectItem : selectItems) {
+				selectItem.accept(new SelectItemVisitor() {
+					@Override
+					public void visit(AllColumns allColumns) {
+					}
+
+					@Override
+					public void visit(AllTableColumns allTableColumns) {
+						String tableName = allTableColumns.getTable().getName();
+						columnNames.add(tableName + ".*");
+					}
+
+					@Override
+					public void visit(SelectExpressionItem selectExpressionItem) {
+						Expression expression = selectExpressionItem.getExpression();
+						extractColumnNamesFromExpression(expression, tableAliasMap, columnNames);
+					}
+				});
+			}
+		}
+	}
+
+	private static void extractColumnNamesFromExpression(Expression expression, Map<String, String> tableAliasMap, Set<String> columnNames) {
+		if (expression != null) {
+			expression.accept(new ExpressionVisitorAdapter() {
+				@Override
+				public void visit(Column column) {
+					String tableName = column.getTable() != null ? column.getTable().getName() : null;
+					String columnName = column.getColumnName();
+					String fullTableName = tableAliasMap.getOrDefault(tableName, tableName);
+					if (fullTableName != null && columnName != null) {
+						columnNames.add(fullTableName + "." + columnName);
+					}
+				}
+
+				@Override
+				public void visit(SubSelect subSelect) {
+					extractColumnNamesFromSelectBody(subSelect.getSelectBody(), tableAliasMap, columnNames);
+				}
+
+				@Override
+				public void visit(Function function) {
+					if (function.getParameters() != null) {
+						List<Expression> expressions = function.getParameters().getExpressions();
+						for (Expression expr : expressions) {
+							extractColumnNamesFromExpression(expr, tableAliasMap, columnNames);
+						}
+					}
+				}
+
+				@Override
+				public void visit(CaseExpression caseExpression) {
+					extractColumnNamesFromExpression(caseExpression.getSwitchExpression(), tableAliasMap, columnNames);
+					if (caseExpression.getWhenClauses() != null) {
+						for (Expression whenClause : caseExpression.getWhenClauses()) {
+							extractColumnNamesFromExpression(whenClause, tableAliasMap, columnNames);
+						}
+					}
+					extractColumnNamesFromExpression(caseExpression.getElseExpression(), tableAliasMap, columnNames);
+				}
+
+				@Override
+				protected void visitBinaryExpression(BinaryExpression binaryExpression) {
+					extractColumnNamesFromExpression(binaryExpression.getLeftExpression(), tableAliasMap, columnNames);
+					extractColumnNamesFromExpression(binaryExpression.getRightExpression(), tableAliasMap, columnNames);
+					super.visitBinaryExpression(binaryExpression);
+				}
+			});
+		}
+	}
+
+	private static void extractColumnNamesFromOrderByElements(List<OrderByElement> orderByElements, Map<String, String> tableAliasMap, Set<String> columnNames) {
+		if (orderByElements != null) {
+			for (OrderByElement orderByElement : orderByElements) {
+				extractColumnNamesFromExpression(orderByElement.getExpression(), tableAliasMap, columnNames);
+			}
+		}
+	}
+
+	private static void extractColumnNamesFromGroupByElements(List<Expression> groupByElements, Map<String, String> tableAliasMap, Set<String> columnNames) {
+		if (groupByElements != null) {
+			for (Expression groupByElement : groupByElements) {
+				extractColumnNamesFromExpression(groupByElement, tableAliasMap, columnNames);
+			}
+		}
+	}
+
+	private static void extractColumnNamesFromJoins(List<Join> joins, Map<String, String> tableAliasMap, Set<String> columnNames) {
+		if (joins != null) {
+			for (Join join : joins) {
+				extractColumnNamesFromExpression(join.getOnExpression(), tableAliasMap, columnNames);
+				if (join.getRightItem() instanceof SubSelect) {
+					SubSelect subSelect = (SubSelect) join.getRightItem();
+					extractColumnNamesFromSelectBody(subSelect.getSelectBody(), tableAliasMap, columnNames);
 				}
 			}
 		}
